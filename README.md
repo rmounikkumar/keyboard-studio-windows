@@ -41,6 +41,24 @@ copy the report.
 To build the standalone exe yourself, double-click **`build-exe.bat`** — the
 result lands in `dist\Keyboard Studio\`.
 
+## Install the build you made
+
+The exe needs no installer, but copying it somewhere stable keeps the shortcut
+pointing at a file you won't clean up by accident. Per-user, no admin:
+
+1. Create `%LOCALAPPDATA%\Programs\Keyboard Studio`.
+2. Copy everything from `dist\Keyboard Studio\` into it.
+3. Right-click `Keyboard Studio.exe` → **Send to → Desktop (create shortcut)**,
+   and/or **Pin to Start**.
+
+After that, double-click **`update-installed.bat`** whenever you change the
+source: it rebuilds with PyInstaller and mirrors the new build over the
+installed copy, leaving your shortcuts alone.
+
+To remove it again: delete the two shortcuts, the
+`%LOCALAPPDATA%\Programs\Keyboard Studio` folder and `%APPDATA%\KeyboardStudio`.
+No registry keys, services or drivers are created.
+
 ## What you should see
 
 - Pressing **Scroll Lock** toggles the strip (Windows drives that LED itself, so
@@ -103,6 +121,7 @@ clipboard** is there for that reason.
 | `run.bat` | starts the app without a console |
 | `diagnose.bat` | prints the driver report and waits |
 | `build-exe.bat` | builds a standalone `Keyboard Studio.exe` with PyInstaller |
+| `update-installed.bat` | rebuilds and copies the new build over the installed copy |
 | `requirements.txt` | PySide6, psutil |
 
 ## Effects
