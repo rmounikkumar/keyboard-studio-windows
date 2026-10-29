@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# PyInstaller output
+build/
+dist/
+*.log
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
