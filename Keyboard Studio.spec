@@ -5,7 +5,7 @@ a = Analysis(
     ['keyboard_studio.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('assets/keyboard.png', 'assets')],
     hiddenimports=['psutil'],
     hookspath=[],
     hooksconfig={},
@@ -32,6 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/keyboard.ico',
 )
 coll = COLLECT(
     exe,

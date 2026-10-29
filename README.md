@@ -1,5 +1,7 @@
 # Keyboard Studio — Windows
 
+<img src="assets/keyboard.png" width="88" align="right" alt="Keyboard Studio icon" />
+
 Same idea as the Linux version, ported to Windows: 14 lighting effects for the
 **CASUE USB KB** (`2A7A:959F`), with a live preview and a speed slider.
 
@@ -9,7 +11,7 @@ Same idea as the Linux version, ported to Windows: 14 lighting effects for the
 
 [![Latest release](https://img.shields.io/github/v/release/rmounikkumar/keyboard-studio-windows?color=38bdf8&label=latest%20release)](https://github.com/rmounikkumar/keyboard-studio-windows/releases/latest)
 
-Grab **`Keyboard-Studio-1.0.0-win64.zip`** from the
+Grab **`Keyboard-Studio-1.0.1-win64.zip`** from the
 [latest release](https://github.com/rmounikkumar/keyboard-studio-windows/releases/latest),
 unzip it anywhere, and run **`Keyboard Studio\Keyboard Studio.exe`**. The build
 is self-contained — no Python install, no installer, no admin rights. It is a
@@ -123,6 +125,8 @@ clipboard** is there for that reason.
 | `build-exe.bat` | builds a standalone `Keyboard Studio.exe` with PyInstaller |
 | `update-installed.bat` | rebuilds and copies the new build over the installed copy |
 | `requirements.txt` | PySide6, psutil |
+| `assets/keyboard.png`, `assets/keyboard.ico` | app icon (window + exe) |
+| `tools/make_icon.py` | redraws the icon files |
 
 ## Effects
 

@@ -26,6 +26,13 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog, QGridLayout,
 
 IS_WINDOWS = sys.platform == "win32"
 
+
+def resource_path(*parts):
+    """A bundled file, whether running from source or from the built exe."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, *parts)
+
+
 try:
     import hidwin
 except Exception as _exc:                     # non-Windows / import problem
@@ -339,7 +346,9 @@ class Studio(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Keyboard Studio")
-        self.setWindowIcon(QIcon.fromTheme("input-keyboard"))
+        icon_path = resource_path("assets", "keyboard.png")
+        self.setWindowIcon(QIcon(icon_path) if os.path.exists(icon_path)
+                           else QIcon.fromTheme("input-keyboard"))
         self.resize(720, 800)
 
         self.stats = Stats()
@@ -579,6 +588,9 @@ def main():
         return 0
     app = QApplication(sys.argv)
     app.setApplicationName("Keyboard Studio")
+    icon_path = resource_path("assets", "keyboard.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     win = Studio()
     win.show()
     return app.exec()
