@@ -15,7 +15,7 @@ limit: the strip is powered by the ScrollLock LED bit.
 | Platform | Asset | Start with |
 |---|---|---|
 | Windows 10/11 | `Keyboard-Studio-1.0.1-win64.zip` | unzip, then run `Keyboard Studio\Keyboard Studio.exe` |
-| Linux | `keyboard-studio-linux.zip` | unzip, then `cd linux && ./install.sh` |
+| Linux | `keyboard-studio-linux.zip` | unzip, then run `install.sh` from the extracted folder |
 
 Both are attached to the
 [latest release](https://github.com/rmounikkumar/keyboard-studio-windows/releases/latest).
@@ -39,9 +39,11 @@ ScrollLock bit, plus a PySide6 GUI and a `casue-kbd-effect` CLI:
 
 ```bash
 unzip keyboard-studio-linux.zip
-cd linux
+cd keyboard-studio-linux
 ./install.sh      # user pieces, then asks for the admin password once (pkexec)
 ```
+
+(Using the repo instead of the zip? `cd linux` first — same files.)
 
 Then open **Settings → Keyboard Studio**, or run `casue-kbd-effect aurora`.
 Why it works, the mode table, the LED-bit proof and the uninstall steps are in

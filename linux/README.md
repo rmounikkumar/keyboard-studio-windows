@@ -62,9 +62,10 @@ interface, so a laptop's internal keyboard is never touched.
 ## Install
 
 ```bash
-cd linux        # inside the cloned repo (or the extracted release zip)
-./install.sh
+./install.sh      # run from this folder, or from the extracted release zip
 ```
+
+(Cloned the repo instead? `cd linux` first, then run it.)
 
 It installs the user-side pieces (GUI, CLI autostart entry, menu entry) without
 a password, then asks for the admin password once via `pkexec` to install and
@@ -130,8 +131,7 @@ with the light on, then keeps toggling.
 ## Uninstall
 
 ```bash
-cd linux
-./uninstall.sh
+./uninstall.sh      # from this folder
 ```
 
 Removes the service, binaries, menu/autostart entries and the log. Your saved
