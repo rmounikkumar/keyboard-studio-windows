@@ -1,0 +1,38 @@
+#!/usr/bin/python3
+"""Re-apply the last effect chosen in Keyboard Studio at login."""
+import json
+import os
+import time
+
+STATE = os.path.expanduser("~/.config/keyboard-studio/state.json")
+MODE = "/run/casue-kbd-effect"
+PARAM = "/run/casue-kbd-params"
+VALID = {"steady", "off", "slow", "pulse", "breathe", "aurora", "heartbeat",
+         "strobe", "candle", "sos", "typing", "cpu", "disk", "net"}
+
+try:
+    with open(STATE) as f:
+        data = json.load(f)
+except (OSError, ValueError):
+    raise SystemExit(0)
+
+mode = data.get("mode", "steady")
+if mode not in VALID:
+    raise SystemExit(0)
+try:
+    speed = max(0.2, min(6.0, float(data.get("speed", 1.0))))
+except (TypeError, ValueError):
+    speed = 1.0
+
+for _ in range(40):                     # the service creates the files at boot
+    if os.access(MODE, os.W_OK):
+        break
+    time.sleep(0.25)
+
+try:
+    with open(MODE, "w") as f:
+        f.write(mode)
+    with open(PARAM, "w") as f:
+        json.dump({"speed": round(speed, 3)}, f)
+except OSError:
+    pass

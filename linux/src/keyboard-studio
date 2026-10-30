@@ -1,0 +1,406 @@
+#!/usr/bin/python3
+"""Keyboard Studio — lighting effects for the CASUE USB keyboard.
+
+The keyboard has one lighting zone and can only be switched on/off, so every
+effect here is a pattern of that bit. The window previews the pattern live.
+"""
+import json
+import math
+import os
+import random
+import sys
+import time
+
+from PySide6.QtCore import Qt, QTimer, QRectF
+from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPen
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QGridLayout,
+                               QHBoxLayout, QLabel, QPushButton, QSlider,
+                               QVBoxLayout, QWidget)
+
+MODE_FILE = "/run/casue-kbd-effect"
+PARAM_FILE = "/run/casue-kbd-params"
+STATE_FILE = os.path.expanduser("~/.config/keyboard-studio/state.json")
+VALID_MODES = {"steady", "off", "slow", "pulse", "breathe", "aurora", "heartbeat",
+               "strobe", "candle", "sos", "typing", "cpu", "disk", "net"}
+
+EFFECTS = [
+    ("steady", "Steady", "Always on; Scroll Lock toggles it"),
+    ("off", "Off", "Light off"),
+    ("slow", "Slow blink", "4 s on / 4 s off"),
+    ("pulse", "Pulse", "3.2 s swell"),
+    ("breathe", "Breathe", "1.6 s swell"),
+    ("aurora", "Aurora", "Drifting, irregular swells"),
+    ("heartbeat", "Heartbeat", "Double beat, 1.25 s"),
+    ("strobe", "Strobe", "8 Hz flicker — use with care"),
+    ("candle", "Candle", "Random soft flicker"),
+    ("sos", "SOS", "Morse \u00b7\u00b7\u00b7 \u2014\u2014\u2014 \u00b7\u00b7\u00b7"),
+    ("typing", "Typing", "Lights up while you type"),
+    ("cpu", "CPU", "Blink rate follows CPU load"),
+    ("disk", "Disk", "Flickers with storage activity"),
+    ("net", "Net", "Flickers with network activity"),
+]
+
+# Morse schedule (same as the service)
+_SOS, _t = [], 0.0
+for _group in ("short", "long", "short"):
+    for _ in range(3):
+        _on = 0.15 if _group == "short" else 0.45
+        _SOS.append((_t, _t + _on))
+        _t += _on + 0.15
+    _t += 0.30 if _group != "short" else 0.0
+SOS, SOS_LEN = tuple(_SOS), _t + 1.0
+
+
+def read_mode():
+    try:
+        with open(MODE_FILE) as f:
+            m = f.read().strip()
+        return m if m else "steady"
+    except OSError:
+        return "steady"
+
+
+def write_mode(mode):
+    try:
+        with open(MODE_FILE, "w") as f:
+            f.write(mode)
+        return True
+    except OSError:
+        return False
+
+
+def read_speed():
+    try:
+        with open(PARAM_FILE) as f:
+            return max(0.2, min(6.0, float(json.load(f).get("speed", 1.0))))
+    except (OSError, ValueError, TypeError):
+        return 1.0
+
+
+def write_speed(v):
+    try:
+        with open(PARAM_FILE, "w") as f:
+            json.dump({"speed": round(v, 3)}, f)
+    except OSError:
+        pass
+
+
+def save_state(mode, speed):
+    """Remember the last choice so it can be restored at login."""
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"mode": mode, "speed": round(speed, 3)}, f)
+        os.replace(tmp, STATE_FILE)
+    except OSError:
+        pass
+
+
+def pattern(mode, t, speed=1.0):
+    t *= speed
+    if mode == "steady":
+        return True
+    if mode == "off":
+        return False
+    if mode == "slow":
+        return (t % 8.0) < 4.0
+    if mode == "pulse":
+        return math.sin(2 * math.pi * t / 3.2) > -0.35
+    if mode == "breathe":
+        return math.sin(2 * math.pi * t / 1.6) > -0.35
+    if mode == "aurora":
+        v = (math.sin(2 * math.pi * t / 2.6)
+             + 0.60 * math.sin(2 * math.pi * t / 1.27 + 1.1)
+             + 0.30 * math.sin(2 * math.pi * t / 0.73 + 2.0))
+        return v > -0.10
+    if mode == "heartbeat":
+        ph = t % 1.25
+        return not (ph < 0.09 or 0.24 <= ph < 0.33)
+    if mode == "strobe":
+        return (t * 8) % 1 < 0.5
+    if mode == "candle":
+        return random.random() > 0.22
+    if mode == "sos":
+        ph = t % SOS_LEN
+        return any(a <= ph < b for a, b in SOS)
+    return math.sin(2 * math.pi * t / 1.9) + 0.4 * math.sin(2 * math.pi * t / 0.77) > -0.2
+
+
+class Preview(QWidget):
+    """A little keyboard that lights up exactly like the real one (all keys at once)."""
+
+    ROWS = (
+        [1] * 13 + [2],
+        [1.5] + [1] * 12 + [1.5],
+        [1.75] + [1] * 11 + [2.25],
+        [2.25] + [1] * 10 + [2.75],
+        [1.25] * 4 + [6.25] + [1.25] * 3,
+    )
+    GRAD = ((0.0, "#38bdf8"), (0.42, "#818cf8"),
+            (0.72, "#c084fc"), (1.0, "#f472b6"))
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(170)
+        self.mode = read_mode()
+        self.speed = read_speed()
+        self.lit = 1.0
+        self.t0 = time.monotonic()
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.tick)
+        self.timer.start(33)
+
+    def set_mode(self, m):
+        self.mode = m
+        self.t0 = time.monotonic()
+
+    def set_speed(self, s):
+        self.speed = s
+
+    def tick(self):
+        target = 1.0 if pattern(self.mode, time.monotonic() - self.t0, self.speed) else 0.0
+        self.lit += (target - self.lit) * 0.55
+        if abs(target - self.lit) < 0.01:
+            self.lit = target
+        self.update()
+
+    @classmethod
+    def grad_color(cls, f):
+        stops = [(p, QColor(c)) for p, c in cls.GRAD]
+        for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+            if f <= p1:
+                k = 0.0 if p1 == p0 else (f - p0) / (p1 - p0)
+                return QColor(
+                    round(c0.red() + (c1.red() - c0.red()) * k),
+                    round(c0.green() + (c1.green() - c0.green()) * k),
+                    round(c0.blue() + (c1.blue() - c0.blue()) * k))
+        return stops[-1][1]
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        card = QRectF(1, 1, self.width() - 2, self.height() - 2)
+        p.setPen(QPen(QColor("#1b2a44"), 1))
+        p.setBrush(QColor("#0a1120"))
+        p.drawRoundedRect(card, 14, 14)
+
+        pad, gap, units = 18.0, 3.0, 15.0
+        area = card.adjusted(pad, pad, -pad, -pad)
+        unit_w = (area.width() - gap * (units - 1)) / units
+        rows = len(self.ROWS)
+        key_h = (area.height() - gap * (rows - 1)) / rows
+
+        lit = max(0.0, min(1.0, self.lit))
+        dark = QColor("#111c2e")
+        if lit > 0.02:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(129, 140, 248, int(30 * lit)))
+            p.drawRoundedRect(card.adjusted(6, 6, -6, -6), 16, 16)
+
+        for ri, row in enumerate(self.ROWS):
+            total = sum(row)
+            row_w = total * unit_w + gap * (total - 1)
+            x = area.left() + (area.width() - row_w) / 2
+            y = area.top() + ri * (key_h + gap)
+            for u in row:
+                w = u * unit_w + gap * (u - 1)
+                kr = QRectF(x, y, w, key_h)
+                if lit > 0.02:
+                    f = (kr.center().x() - area.left()) / max(1.0, area.width())
+                    col = self.grad_color(max(0.0, min(1.0, f)))
+                    base = QColor(
+                        round(dark.red() + (col.red() - dark.red()) * lit),
+                        round(dark.green() + (col.green() - dark.green()) * lit),
+                        round(dark.blue() + (col.blue() - dark.blue()) * lit))
+                    p.setPen(QPen(QColor(255, 255, 255, int(46 * lit)), 1))
+                    p.setBrush(base)
+                else:
+                    p.setPen(QPen(QColor("#1d2c44"), 1))
+                    p.setBrush(dark)
+                p.drawRoundedRect(kr, 3.0, 3.0)
+                x += w + gap
+
+
+class Studio(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Keyboard Studio")
+        self.setWindowIcon(QIcon.fromTheme("input-keyboard"))
+        self.resize(700, 775)
+        self.mode = read_mode()
+        self.t0 = time.monotonic()
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 18)
+        root.setSpacing(16)
+
+        head = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        t = QLabel("Keyboard Studio")
+        t.setObjectName("title")
+        self.subtitle = QLabel("CASUE USB KB  \u00b7  one lighting zone (on/off)")
+        self.subtitle.setObjectName("sub")
+        titles.addWidget(t)
+        titles.addWidget(self.subtitle)
+        head.addLayout(titles)
+        head.addStretch(1)
+        self.chip = QLabel()
+        self.chip.setObjectName("chip")
+        head.addWidget(self.chip, 0, Qt.AlignTop)
+        root.addLayout(head)
+
+        self.preview = Preview(self)
+        root.addWidget(self.preview)
+
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.buttons = {}
+        for i, (key, name, hint) in enumerate(EFFECTS):
+            b = QPushButton(name)
+            b.setCheckable(True)
+            b.setToolTip(hint)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumHeight(52)
+            b.clicked.connect(lambda _=False, k=key: self.pick(k))
+            self.group.addButton(b)
+            self.buttons[key] = b
+            grid.addWidget(b, i // 3, i % 3)
+        root.addLayout(grid)
+
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(12)
+        self.speed_title = QLabel("Speed")
+        self.speed_title.setObjectName("sub")
+        speed_row.addWidget(self.speed_title)
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(25, 400)
+        self.slider.setSingleStep(5)
+        self.slider.setPageStep(25)
+        self.slider.setValue(int(round(read_speed() * 100)))
+        self.slider.valueChanged.connect(self.on_speed)
+        speed_row.addWidget(self.slider, 1)
+        self.speed_label = QLabel()
+        self.speed_label.setMinimumWidth(52)
+        self.speed_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        speed_row.addWidget(self.speed_label)
+        reset = QPushButton("Reset")
+        reset.setObjectName("small")
+        reset.setCursor(Qt.PointingHandCursor)
+        reset.clicked.connect(lambda: self.slider.setValue(100))
+        speed_row.addWidget(reset)
+        root.addLayout(speed_row)
+
+        foot = QLabel("Scroll Lock toggles the light and exits any effect  \u00b7  "
+                      "colour comes from the keyboard\u2019s own firmware mode")
+        foot.setObjectName("footer")
+        foot.setWordWrap(True)
+        root.addWidget(foot)
+
+        self.setStyleSheet("""
+            QWidget { background: #070b14; color: #c9d5e6;
+                      font-family: 'Noto Sans', 'DejaVu Sans', sans-serif; font-size: 13px; }
+            #title { font-size: 23px; font-weight: 700; color: #eaf2ff; }
+            #sub { color: #7c8ba3; font-size: 12px; }
+            #chip { background: #10203a; border: 1px solid #1e3a5f; border-radius: 12px;
+                    padding: 5px 14px; color: #8fd0ff; font-weight: 600; font-size: 12px; }
+            #footer { color: #6b7a92; font-size: 11px; }
+            QPushButton { background: #0d1726; border: 1px solid #1b2a42; border-radius: 10px;
+                          padding: 10px 8px; color: #b9c7dc; font-size: 13px; }
+            QPushButton:hover { background: #14233a; border-color: #2a4a72; color: #e6eefb; }
+            QPushButton:pressed { background: #0a1420; }
+            QPushButton:checked { background: #12283f; border: 1px solid #38bdf8; color: #eaf7ff; }
+            QPushButton#small { padding: 6px 14px; font-size: 12px; color: #93a3bb; }
+            QSlider::groove:horizontal { height: 6px; background: #141f33; border-radius: 3px; }
+            QSlider::sub-page:horizontal { background: #38bdf8; border-radius: 3px; }
+            QSlider::handle:horizontal { width: 16px; margin: -6px 0; border-radius: 8px;
+                                         background: #d8ecff; border: 1px solid #38bdf8; }
+        """)
+
+        self.sync_chip()
+        self.buttons.get(self.mode, self.buttons["steady"]).setChecked(True)
+        self.preview.set_mode(self.mode)
+        self.speed_label.setText(f"{read_speed():.2f}\u00d7")
+        for lab in (self.subtitle, self.speed_title):
+            lab.setMinimumWidth(lab.sizeHint().width() + 8)
+
+        self.poller = QTimer(self)
+        self.poller.timeout.connect(self.poll_mode)
+        self.poller.start(400)
+
+    def pick(self, mode):
+        if write_mode(mode):
+            self.mode = mode
+            self.preview.set_mode(mode)
+            self.sync_chip()
+            save_state(mode, read_speed())
+
+    def on_speed(self, value):
+        sp = value / 100.0
+        write_speed(sp)
+        self.preview.set_speed(sp)
+        self.speed_label.setText(f"{sp:.2f}\u00d7")
+        save_state(self.mode, sp)
+
+    def sync_chip(self):
+        name = dict((k, n) for k, n, _ in EFFECTS).get(self.mode, self.mode)
+        self.chip.setText(f"\u25cf  {name.upper()}")
+
+    def poll_mode(self):
+        m = read_mode()
+        if m != self.mode:
+            self.mode = m
+            self.preview.set_mode(m)
+            self.sync_chip()
+            b = self.buttons.get(m)
+            if b:
+                b.setChecked(True)
+            save_state(m, read_speed())
+
+
+def claim_instance():
+    """Return a listening server, or None when another instance already runs."""
+    sock = QLocalSocket()
+    sock.connectToServer("keyboard-studio")
+    if sock.waitForConnected(200):
+        sock.write(b"show")
+        sock.flush()
+        sock.waitForBytesWritten(200)
+        sock.disconnectFromServer()
+        return None
+    QLocalServer.removeServer("keyboard-studio")
+    server = QLocalServer()
+    server.listen("keyboard-studio")
+    return server
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("Keyboard Studio")
+    app.setDesktopFileName("keyboard-studio")
+    server = claim_instance()
+    if server is None:
+        return 0
+    win = Studio()
+    win.show()
+
+    def show_existing():
+        while server.hasPendingConnections():
+            server.nextPendingConnection().deleteLater()
+        win.showNormal()
+        win.raise_()
+        win.activateWindow()
+
+    server.newConnection.connect(show_existing)
+    app._server = server
+    app._win = win
+    app.aboutToQuit.connect(lambda: QLocalServer.removeServer("keyboard-studio"))
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

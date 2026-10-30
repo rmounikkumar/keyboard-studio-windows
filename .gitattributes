@@ -1,0 +1,10 @@
+# Shell scripts and the Linux service must stay LF, even when committed from Windows.
+*.sh text eol=lf
+*.py text eol=lf
+linux/src/* text eol=lf
+linux/desktop/* text eol=lf
+*.desktop text eol=lf
+*.service text eol=lf
+
+# Windows helpers keep CRLF.
+*.bat text eol=crlf

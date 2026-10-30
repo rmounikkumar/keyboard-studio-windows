@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Keyboard Studio (restore last effect)
+Comment=Reapply the keyboard lighting effect chosen in Keyboard Studio
+Exec=/home/krish/.local/bin/keyboard-studio-restore
+Icon=input-keyboard
+Terminal=false
+NoDisplay=true
+X-KDE-autostart-after=panel

@@ -1,0 +1,10 @@
+paths: cap=/sys/class/leds/input3::capslock/brightness num=/sys/class/leds/input3::numlock/brightness scroll=/sys/class/leds/input3::scrolllock/brightness compose=/sys/class/leds/input3::compose/brightness kana=/sys/class/leds/input3::kana/brightness
+  0.0s  caps=0 num=0 scroll=0  -> light off
+  2.0s  caps=0 num=1 scroll=0  -> light off
+  4.0s  caps=1 num=0 scroll=0  -> light off
+  6.0s  caps=1 num=1 scroll=0  -> light off
+  8.0s  caps=0 num=0 scroll=1  -> light ON
+ 10.0s  caps=0 num=1 scroll=1  -> light ON
+ 12.0s  caps=1 num=0 scroll=1  -> light ON
+ 14.0s  caps=1 num=1 scroll=1  -> light ON
+done: scrolllock=1 (light on)

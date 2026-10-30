@@ -1,0 +1,343 @@
+#!/usr/bin/python3
+"""Lighting control for the CASUE USB KB (ScrollLock LED bit = light switch).
+
+The hardware is binary (on/off only), so every effect is a blink pattern.
+Pick one with `casue-kbd-effect <mode>`; `casue-kbd-effect` lists them.
+
+Scroll Lock always works: in an effect it drops back to steady + light on.
+"""
+import ctypes, glob, json, math, os, random, select, signal, struct, sys, time
+
+IN_MODIFY = 0x2
+IN_CLOSE_WRITE = 0x8
+IN_CREATE = 0x100
+IN_MOVED_TO = 0x80
+IN_IGNORED = 0x8000
+LED_DIR = "/sys/class/leds"
+MATCH = "2A7A:959F"
+LOG = "/var/log/casue-kbd-backlight.log"
+MODE_FILE = "/run/casue-kbd-effect"
+PARAM_FILE = "/run/casue-kbd-params"
+KEY_SCROLLLOCK = 70
+EV_KEY = 1
+EVENT = struct.Struct("llHHi")
+
+MODES = ("steady", "off", "slow", "pulse", "breathe", "aurora", "heartbeat",
+         "strobe", "candle", "sos", "typing", "cpu", "disk", "net")
+
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+
+state = 1
+dirty = False
+mode_seen = None
+
+# --- sos schedule -----------------------------------------------------------
+_SOS, _t = [], 0.0
+for _group in ("short", "long", "short"):
+    for _ in range(3):
+        _on = 0.15 if _group == "short" else 0.45
+        _SOS.append((_t, _t + _on))
+        _t += _on + 0.15
+    _t += 0.30 if _group != "short" else 0.0
+SOS = tuple(_SOS)
+SOS_LEN = _t + 1.0
+
+
+def log(msg):
+    try:
+        with open(LOG, "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+        os.chmod(LOG, 0o644)
+    except OSError:
+        pass
+
+
+def leds():
+    out = []
+    for p in glob.glob(os.path.join(LED_DIR, "*::scrolllock", "brightness")):
+        try:
+            real = os.path.realpath(p)
+        except OSError:
+            continue
+        if MATCH in real.upper():
+            out.append(real)
+    return out
+
+
+def write_leds(value, why=""):
+    wrote = False
+    for p in leds():
+        try:
+            with open(p) as f:
+                cur = f.read().strip()
+        except OSError:
+            continue
+        if cur == str(value):
+            continue
+        try:
+            with open(p, "w") as f:
+                f.write(str(value))
+            wrote = True
+        except OSError as e:
+            log(f"write failed {p}: {e}")
+    if wrote and why:
+        log(f"light {value} ({why})")
+    return wrote
+
+
+def enforce(value):
+    write_leds(value)
+
+
+def speed():
+    try:
+        with open(PARAM_FILE) as f:
+            v = float(json.load(f).get("speed", 1.0))
+    except (OSError, ValueError, TypeError):
+        return 1.0
+    return max(0.2, min(6.0, v))
+
+
+def mode():
+    try:
+        with open(MODE_FILE) as f:
+            m = f.read().strip()
+    except OSError:
+        return "steady"
+    return m if m in MODES else "steady"
+
+
+# --- samplers ---------------------------------------------------------------
+S = {"cpu": (0, 0, 0.0), "disk": (0, 0.0), "net": (0, 0.0),
+     "last_key": -99.0, "candle": (0.0, 1), "disk_hot": 0.0, "net_hot": 0.0}
+
+
+def sample_cpu():
+    try:
+        with open("/proc/stat") as f:
+            parts = [int(x) for x in f.readline().split()[1:]]
+        idle = parts[3] + parts[4]
+        total = sum(parts)
+    except (OSError, ValueError):
+        return
+    lt, li, _u = S["cpu"]
+    usage = 0.0
+    if lt and total > lt:
+        usage = max(0.0, min(1.0, 1 - (idle - li) / (total - lt)))
+    S["cpu"] = (total, idle, usage)
+
+
+def sample_disk(now):
+    try:
+        with open("/proc/diskstats") as f:
+            busy = 0
+            for line in f:
+                p = line.split()
+                if len(p) < 14 or p[2].startswith(("loop", "ram", "zram", "sr")):
+                    continue
+                busy += int(p[5]) + int(p[9])
+    except (OSError, ValueError):
+        return
+    last, _ = S["disk"]
+    if last and busy - last > 64:
+        S["disk_hot"] = now
+    S["disk"] = (busy, now)
+
+
+def sample_net(now):
+    try:
+        with open("/proc/net/dev") as f:
+            lines = f.read().splitlines()[2:]
+        total = 0
+        for line in lines:
+            parts = line.split()
+            if len(parts) > 9 and parts[0].strip(":") != "lo":
+                total += int(parts[1]) + int(parts[9])
+    except (OSError, ValueError, IndexError):
+        return
+    last, _ = S["net"]
+    if last and total - last > 4096:
+        S["net_hot"] = now
+    S["net"] = (total, now)
+
+
+# --- effects ----------------------------------------------------------------
+def effect(m, t, now):
+    if m == "slow":
+        return 1 if (t % 8.0) < 4.0 else 0       # 4 s on, 4 s off
+    if m == "pulse":
+        return 1 if math.sin(2 * math.pi * t / 3.2) > -0.35 else 0
+    if m == "breathe":
+        return 1 if math.sin(2 * math.pi * t / 1.6) > -0.35 else 0
+    if m == "aurora":
+        # layered sines -> drifting swells 0.4-1.7 s long, no fixed beat
+        v = (math.sin(2 * math.pi * t / 2.6)
+             + 0.60 * math.sin(2 * math.pi * t / 1.27 + 1.1)
+             + 0.30 * math.sin(2 * math.pi * t / 0.73 + 2.0))
+        return 1 if v > -0.10 else 0
+    if m == "heartbeat":
+        ph = t % 1.25
+        return 0 if (ph < 0.09 or 0.24 <= ph < 0.33) else 1
+    if m == "strobe":
+        return 1 if (t * 8) % 1 < 0.5 else 0
+    if m == "candle":
+        ct, cv = S["candle"]
+        if t - ct > random.uniform(0.06, 0.16):
+            cv = 1 if random.random() > 0.28 else 0
+            S["candle"] = (t, cv)
+        return cv
+    if m == "sos":
+        ph = t % SOS_LEN
+        return 1 if any(a <= ph < b for a, b in SOS) else 0
+    if m == "typing":
+        return 1 if now - S["last_key"] < 1.2 else 0
+    if m == "cpu":
+        u = S["cpu"][2]
+        duty = 0.10 + 0.50 * u
+        return 1 if t % 0.6 < duty else 0
+    if m == "disk":
+        return 1 if now - S["disk_hot"] < 0.30 else 0
+    if m == "net":
+        return 1 if now - S["net_hot"] < 0.30 else 0
+    return 1
+
+
+# --- device plumbing --------------------------------------------------------
+def kbd_device():
+    cand = "/dev/input/by-id/usb-2a7a_CASUE_USB_KB-event-kbd"
+    if os.path.exists(cand):
+        return cand
+    for ev in sorted(glob.glob("/dev/input/event*")):
+        try:
+            name = open(f"/sys/class/input/{os.path.basename(ev)}/device/name").read().strip()
+        except OSError:
+            continue
+        if name == "CASUE USB KB":
+            return ev
+    return None
+
+
+def open_kbd():
+    path = kbd_device()
+    if not path:
+        return None
+    try:
+        return os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+
+
+def on_scroll(*_):
+    global dirty
+    dirty = True
+
+
+def main():
+    global dirty, state, mode_seen
+    signal.signal(signal.SIGUSR1, on_scroll)
+    try:
+        with open(MODE_FILE):
+            pass
+    except OSError:
+        with open(MODE_FILE, "w") as f:
+            f.write("steady")
+    os.chmod(MODE_FILE, 0o666)
+
+    fd = libc.inotify_init1(os.O_NONBLOCK)
+    watches = {}
+    libc.inotify_add_watch(fd, LED_DIR.encode(), IN_CREATE | IN_MOVED_TO)
+
+    def watch():
+        for p in leds():
+            if p not in watches.values():
+                wd = libc.inotify_add_watch(fd, p.encode(), IN_MODIFY | IN_CLOSE_WRITE)
+                if wd >= 0:
+                    watches[wd] = p
+
+    try:
+        with open(PARAM_FILE):
+            pass
+    except OSError:
+        with open(PARAM_FILE, "w") as f:
+            f.write('{"speed": 1.0}')
+    os.chmod(PARAM_FILE, 0o666)
+
+    write_leds(state, "startup")
+    watch()
+    kfd = open_kbd()
+    log(f"ready: keyboard={'yes' if kfd is not None else 'no'}, state={state}")
+
+    t0 = time.monotonic()
+    last_sample = 0.0
+    spd = speed()
+
+    while True:
+        now = time.monotonic()
+        m = mode()
+        if m != mode_seen:
+            mode_seen = m
+            log(f"mode -> {m}")
+            S["disk_hot"] = S["net_hot"] = -99.0
+
+        ready, _, _ = select.select(
+            [fd] + ([kfd] if kfd is not None else []), [], [],
+            0.02 if m != "steady" else 0.5)
+
+        if now - last_sample > 0.5:
+            last_sample = now
+            spd = speed()
+            sample_cpu()
+            sample_disk(now)
+            sample_net(now)
+
+        if dirty:
+            dirty = False
+            if m != "steady":
+                with open(MODE_FILE, "w") as f:
+                    f.write("steady")
+                state = 1
+                log("scroll lock: back to steady, light on")
+            else:
+                state ^= 1
+                log(f"scroll lock: light {'on' if state else 'off'}")
+
+        if fd in ready:
+            try:
+                data = os.read(fd, 4096)
+            except BlockingIOError:
+                data = b""
+            off = 0
+            while off + 16 <= len(data):
+                wd = int.from_bytes(data[off:off + 4], "little")
+                mask = int.from_bytes(data[off + 4:off + 8], "little")
+                length = int.from_bytes(data[off + 12:off + 16], "little")
+                off += 16 + length
+                if mask & IN_IGNORED:
+                    watches.pop(wd, None)
+            watch()
+
+        if kfd is not None and kfd in ready:
+            try:
+                buf = os.read(kfd, EVENT.size * 64)
+            except OSError:
+                buf = b""
+                os.close(kfd)
+                kfd = open_kbd()
+            for i in range(0, len(buf) - EVENT.size + 1, EVENT.size):
+                _s, _us, etype, code, value = EVENT.unpack_from(buf, i)
+                if etype == EV_KEY:
+                    S["last_key"] = time.monotonic()
+                    if code == KEY_SCROLLLOCK and value == 1:
+                        dirty = True
+
+        if kfd is None:
+            kfd = open_kbd()
+
+        if m in ("steady", "off"):
+            write_leds(state if m == "steady" else 0)
+        else:
+            write_leds(effect(m, (now - t0) * spd, now))
+
+
+if __name__ == "__main__":
+    main()

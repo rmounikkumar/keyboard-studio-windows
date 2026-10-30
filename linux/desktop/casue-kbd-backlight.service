@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep CASUE USB keyboard RGB backlight on
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/casue-kbd-backlight
+Restart=always
+RestartSec=2
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,28 +1,51 @@
-# Keyboard Studio — Windows
+# Keyboard Studio
 
 <img src="assets/keyboard.png" width="88" align="right" alt="Keyboard Studio icon" />
 
-Same idea as the Linux version, ported to Windows: 14 lighting effects for the
-**CASUE USB KB** (`2A7A:959F`), with a live preview and a speed slider.
+Lighting effects for the **CASUE USB KB** (`2A7A:959F`) on **Windows and Linux**
+— 14 effects, a live preview, and a speed slider, built around the same hardware
+limit: the strip is powered by the ScrollLock LED bit.
 
 ![Keyboard Studio on Windows](screenshot.png)
 
-## Download for Windows
+## Download
 
 [![Latest release](https://img.shields.io/github/v/release/rmounikkumar/keyboard-studio-windows?color=38bdf8&label=latest%20release)](https://github.com/rmounikkumar/keyboard-studio-windows/releases/latest)
 
-Grab **`Keyboard-Studio-1.0.1-win64.zip`** from the
-[latest release](https://github.com/rmounikkumar/keyboard-studio-windows/releases/latest),
-unzip it anywhere, and run **`Keyboard Studio\Keyboard Studio.exe`**. The build
-is self-contained — no Python install, no installer, no admin rights. It is a
-PyInstaller build of the source in this repo (`build-exe.bat`).
+| Platform | Asset | Start with |
+|---|---|---|
+| Windows 10/11 | `Keyboard-Studio-1.0.1-win64.zip` | unzip, then run `Keyboard Studio\Keyboard Studio.exe` |
+| Linux | `keyboard-studio-linux.zip` | unzip, then `cd linux && ./install.sh` |
 
-Windows is the second home for this project, verified on real hardware. LED
-control goes through Windows' own **keyboard class driver**
+Both are attached to the
+[latest release](https://github.com/rmounikkumar/keyboard-studio-windows/releases/latest).
+The Linux sources also live in [`linux/`](linux/README.md) in this repo.
+
+### Windows
+
+The Windows build is self-contained — no Python install, no installer, no admin
+rights. It is a PyInstaller build of the source in this repo (`build-exe.bat`).
+
+LED control goes through Windows' own **keyboard class driver**
 (`IOCTL_KEYBOARD_SET_INDICATORS`), which is the same path Windows uses when it
 updates the ScrollLock/NumLock/CapsLock lights. A HID output-report path remains
 as a fallback. The app still **tests the driver itself** and tells you exactly
 what happened — see [Diagnostics](#diagnostics).
+
+### Linux
+
+The Linux build is a small root service (`casue-kbd-backlight`) that owns the
+ScrollLock bit, plus a PySide6 GUI and a `casue-kbd-effect` CLI:
+
+```bash
+unzip keyboard-studio-linux.zip
+cd linux
+./install.sh      # user pieces, then asks for the admin password once (pkexec)
+```
+
+Then open **Settings → Keyboard Studio**, or run `casue-kbd-effect aurora`.
+Why it works, the mode table, the LED-bit proof and the uninstall steps are in
+[`linux/README.md`](linux/README.md).
 
 ## The hardware limit is the same
 
@@ -30,7 +53,7 @@ The strip is powered by the ScrollLock LED bit. The keyboard exposes one
 lighting zone and no colour channel, so effects are on/off patterns. The
 wave/twinkle/colour animations come from the keyboard's own firmware.
 
-## Run from source
+## Run from source (Windows)
 
 1. Install **Python 3.10+** from python.org (tick *Add python.exe to PATH*).
 2. Double-click **`install.bat`** — installs `PySide6` and `psutil`.
@@ -127,6 +150,7 @@ clipboard** is there for that reason.
 | `requirements.txt` | PySide6, psutil |
 | `assets/keyboard.png`, `assets/keyboard.ico` | app icon (window + exe) |
 | `tools/make_icon.py` | redraws the icon files |
+| `linux/` | Linux build: systemd service, CLI, GUI, install/uninstall scripts |
 
 ## Effects
 
